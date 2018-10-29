@@ -17,7 +17,7 @@ public class Main {
   }
   
   public static void main(String[] args) {
-    int N = 1000000;
+    int N = 10;
     float phi = 0.5f;
     float epsilon = 0.1f;
     int[] data = randomData(N);
