@@ -11,44 +11,74 @@ public class ApproxQuantile {
   
   private final int k;
   
-  private final float phi;
-  
   private Buffer[] buffers;
   
   private int count;
   
   private int streamLength;
   
-  public ApproxQuantile(final int b, final int k, final float phi) {
-    if (b <= 3)
-      throw new IllegalArgumentException("number of buffers need to be at least 3");
-    if (k <= 3)
-      throw new IllegalArgumentException("at least three elements per buffer");
-    if (phi < 0.0f || phi > 1.f)
-      throw new IllegalArgumentException("invalid value for phi");
+  /**
+   * number of Collapse operations (i.e., number of non-leaf non-root nodes
+   */
+  private int C;
+  
+  /**
+   * Sum of weights of all COLLAPSE operations
+   */
+  private int W;
+  
+  /**
+   * Weight of the heaviest COLLAPSE
+   */
+  private int wMax;
+  
+  public ApproxQuantile(final float epsilon, final long N) {
+    int b = ApproxConfiguration.getBValue(epsilon, N);
+    int k = ApproxConfiguration.getKValue(epsilon, N);
     this.b = b;
     this.k = k;
-    this.phi = phi;
     this.buffers = new Buffer[this.b];
     for (int i = 0; i < buffers.length; ++i)
       this.buffers[i] = new Buffer(this.k);
     this.count = 0;
     this.streamLength = 0;
+    this.wMax = 0;
+  }
+  
+  public void load(int[] data) {
+    ArrayList<Integer> buffer = new ArrayList<>(k);
+    for (int i = 0; i < data.length; ++i) {
+      buffer.add(data[i]);
+      if (buffer.size() >= k) {
+        int[] bufferArray = new int[buffer.size()];
+        for (int j = 0; j < buffer.size(); ++j)
+          bufferArray[j] = buffer.get(j);
+        segmentLoad(bufferArray);
+        buffer.clear();
+      }
+    }
+    if (buffer.size() > 0) {
+      int[] bufferArray = new int[buffer.size()];
+      for (int j = 0; j < buffer.size(); ++j)
+        bufferArray[j] = buffer.get(j);
+      segmentLoad(bufferArray);
+    }
   }
   
   /**
    * This receives chunks of up to k elements
    * @param data an array of up to k elements
    */
-  public void load(int[] data) {
+  public void segmentLoad(int[] data) {
     int emptyIndex = -1;
     int emptyCount = 0;
     int minLevel = Integer.MAX_VALUE;
     for (int i = 0; i < buffers.length; ++i) {
+      if (buffers[i].getLevel() >= 0 && minLevel > buffers[i].getLevel())
+        minLevel = buffers[i].getLevel();
       if (buffers[i].getState() == Buffer.State.EMPTY) {
         emptyIndex = i;
         emptyCount++;
-        minLevel = minLevel > buffers[i].getLevel() ? buffers[i].getLevel() : minLevel;
       }
     }
     if (emptyCount >= 2) {
@@ -59,6 +89,7 @@ public class ApproxQuantile {
       int actualElementsAdded = buffers[emptyIndex].newOperation(data);
       buffers[emptyIndex].setLevel(0);
       count += actualElementsAdded;
+      streamLength += data.length;
     } else if (emptyCount == 1) {
       /**
        * invoke new on the empty buffer and assign its level as minLevel
@@ -67,6 +98,7 @@ public class ApproxQuantile {
       int elementsAdded = buffers[emptyIndex].newOperation(data);
       buffers[emptyIndex].setLevel(minLevel);
       count += elementsAdded;
+      streamLength += data.length;
     } else {
       /**
        * Collapse all the buffers with level = minLevel and assign the output buffer level
@@ -78,19 +110,26 @@ public class ApproxQuantile {
           bufferIndices.add(i);
       }
       collapse(bufferIndices, minLevel);
-      /**
-       * The 2nd element in the bufferIndices should be an empty buffer
-       */
-      if (buffers[bufferIndices.get(1)].getState() != Buffer.State.EMPTY)
-        throw new IllegalStateException("non empty buffer");
-      emptyIndex = bufferIndices.get(1);
-      buffers[emptyIndex].init();
-      int elementsAdded = buffers[emptyIndex].newOperation(data);
-      // TODO: Figure out if the following is correct
-      buffers[emptyIndex].setLevel(minLevel + 1);
-      count += elementsAdded;
+      segmentLoad(data);
     }
-    streamLength += data.length;
+  }
+  
+  public int getNumberOfLeaves() {
+    int L = 0;
+    for (Buffer b : buffers) {
+      if (b.getWeight() == 1)
+        L++;
+    }
+    return L;
+  }
+  
+  public int getHeight() {
+    int maxLevel = Integer.MIN_VALUE;
+    for (Buffer b : buffers) {
+      if (maxLevel < b.getLevel())
+        maxLevel = b.getLevel();
+    }
+    return maxLevel + 1;
   }
   
   public void collapse(List<Integer> bufferIndices, int minLevel) {
@@ -114,19 +153,29 @@ public class ApproxQuantile {
     if (outputBufferWeight % 2 != 0) {
       int constant = (outputBufferWeight + 1) / 2;
       for (int j = 0; j < k; ++j)
-        outputBuffer.data.add(tmp.get(j*outputBufferWeight + constant));
+        this.buffers[outputIndex].data.add(tmp.get(j*outputBufferWeight + constant));
     } else {
       int tik = outputBufferWeight / 2;
+      int tok = (outputBufferWeight + 2) / 2;
       for (int j = 0; j < k; ++j) {
-        if (j % 2 == 0)
-          outputBuffer.data.add(tmp.get(j*outputBufferWeight + tik));
-        else
-          outputBuffer.data.add(tmp.get(j*outputBufferWeight + tik + 1));
+        if (j % 2 != 0)
+          this.buffers[outputIndex].data.add(tmp.get(j*outputBufferWeight + tik));
+        else {
+          if (j * outputBufferWeight + tok >= tmp.size())
+            this.buffers[outputIndex].data.add(tmp.get(j * outputBufferWeight + tok - 1));
+          else
+            this.buffers[outputIndex].data.add(tmp.get(j * outputBufferWeight + tok));
+        }
       }
     }
+    C += 1;
+    W += outputBufferWeight;
+    wMax = wMax < outputBufferWeight ? outputBufferWeight : wMax;
   }
   
   public int output(final float phi) {
+    if (phi < 0.0f || phi > 1.f)
+      throw new IllegalArgumentException("invalid value for phi");
     final float beta = ((float) count) / ((float) streamLength);
     final float phiPrime = (2.0f * phi + beta - 1.f) / (2.0f * beta);
     int totalWeight = 0;

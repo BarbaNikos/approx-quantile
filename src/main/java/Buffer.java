@@ -24,10 +24,8 @@ class Buffer {
   
   Buffer(final int k) {
     this.k = k;
-    this.state = State.EMPTY;
     this.data = new ArrayList<>(k);
-    this.weight = 0;
-    this.level = 0;
+    init();
   }
   
   public int newOperation(int[] data) {
@@ -55,9 +53,7 @@ class Buffer {
     return false;
   }
   
-  public void setState(State state) {
-    this.state = state;
-  }
+  public void setState(State state) { this.state = state; }
   
   public State getState() { return this.state; }
   
@@ -65,16 +61,12 @@ class Buffer {
     this.data.clear();
     this.state = State.EMPTY;
     this.weight = 0;
-    this.level = 0;
+    this.level = -1;
   }
   
-  public int getLevel() {
-    return this.level;
-  }
+  public int getLevel() { return this.level; }
   
-  public void setLevel(int level) {
-    this.level = level;
-  }
+  public void setLevel(int level) { this.level = level; }
   
   public int getWeight() { return weight; }
   

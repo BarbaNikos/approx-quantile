@@ -1,7 +1,4 @@
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
+import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -16,10 +13,32 @@ public class Main {
     return data;
   }
   
+  static int lowerBound(float phi, float epsilon, int N) {
+    return (int) Math.ceil((phi - epsilon) * (float) N);
+  }
+  
+  static int upperBound(float phi, float epsilon, int N) {
+    return (int) Math.ceil((phi + epsilon) * (float) N);
+  }
+  
   public static void main(String[] args) {
-    int N = 10;
-    float phi = 0.5f;
-    float epsilon = 0.1f;
+    int N = (int) 1e+7;
+    float epsilon = 0.001f;
+    float phi = 0.99f;
     int[] data = randomData(N);
+    ApproxQuantile approxQuantile = new ApproxQuantile(epsilon, N);
+    approxQuantile.load(data);
+    Arrays.sort(data);
+    int median = data[(int) Math.ceil(phi * (float) N)];
+    int approxMedian = approxQuantile.output(phi);
+    boolean success = false;
+    for (int i = lowerBound(phi, epsilon, N); i <= upperBound(phi, epsilon, N); ++i) {
+      if (data[i] == approxMedian) {
+        success = true;
+        break;
+      }
+    }
+    System.out.println("median: " + median + ", approx-median: " + approxMedian + ", success: " +
+        success);
   }
 }
